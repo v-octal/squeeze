@@ -6,7 +6,6 @@ export interface CompressionSettings {
   targetBytes: number;
   quality: number;
   format: OutputFormat;
-  allowResize: boolean;
   maxWidth: number;
   maxHeight: number;
 }
@@ -25,7 +24,6 @@ type DecodedImage = Dimensions & { source: CanvasImageSource; release: () => voi
 const MAX_PIXELS = 32_000_000;
 const MAX_DIMENSION = 16_384;
 const MAX_METADATA_BYTES = 1_048_576;
-const MAX_RESIZE_STEPS = 12;
 const QUALITY_STEPS = 8;
 const EXTENSIONS = {
   'image/webp': 'webp',
@@ -394,17 +392,18 @@ export async function compressImage(file: File, settings: CompressionSettings): 
     let current = await search();
     if (current.targetMet) return current;
     let smallest = original && original.blob.size < current.blob.size ? original : current;
-    if (!settings.allowResize) return smallest;
-    for (let step = 0; step < MAX_RESIZE_STEPS; step++) {
-      if (dimensions.width === 1 && dimensions.height === 1) break;
-      const scale = Math.max(0.25, Math.min(0.85, Math.sqrt(settings.targetBytes / current.blob.size) * 0.9));
+    while (dimensions.width > 1 || dimensions.height > 1) {
+      const scale = Math.max(0.2, Math.min(0.9, Math.sqrt(settings.targetBytes / current.blob.size) * 0.9));
       const next = fitDimensions(
         image.width,
         image.height,
         Math.max(1, Math.floor(dimensions.width * scale)),
         Math.max(1, Math.floor(dimensions.height * scale)),
       );
-      if (next.width === dimensions.width && next.height === dimensions.height) break;
+      if (next.width === dimensions.width && next.height === dimensions.height) {
+        next.width = Math.max(1, dimensions.width - 1);
+        next.height = Math.max(1, dimensions.height - 1);
+      }
       dimensions = next;
       render();
       current = await search();

@@ -14,7 +14,6 @@ const defaults: CompressionSettings = {
   targetBytes: 1000,
   quality: 0.8,
   format: 'image/webp',
-  allowResize: false,
   maxWidth: 800,
   maxHeight: 800,
 };
@@ -297,7 +296,7 @@ test('outputName rejects unsupported formats and inherited object keys', () => {
 test('quality mode preserves decoded dimensions and the selected quality', async () => {
   await withBrowser({ width: 500, height: 1000 }, async (state) => {
     const file = png();
-    const result = await compressImage(file, { ...defaults, mode: 'quality', quality: 0.3, allowResize: true });
+    const result = await compressImage(file, { ...defaults, mode: 'quality', quality: 0.3 });
     assert.equal(result.width, 500);
     assert.equal(result.height, 1000);
     assert.equal(result.quality, 0.3);
@@ -319,7 +318,7 @@ test('quality mode accepts both quality endpoints', async () => {
   }
 });
 
-test('resize mode fits the bounds at the selected quality even when allowResize is false', async () => {
+test('resize mode fits the bounds at the selected quality', async () => {
   await withBrowser({}, async (state) => {
     const result = await compressImage(png(), {
       ...defaults, mode: 'resize', maxWidth: 300, maxHeight: 100, quality: 0.6,
@@ -360,21 +359,19 @@ test('size mode stops immediately when maximum quality fits', async () => {
   });
 });
 
-test('size mode reports failure without a dimension change when resize is disabled', async () => {
-  await withBrowser({}, async (state) => {
-    const result = await compressImage(png(), { ...defaults, targetBytes: 20 });
-    assert.equal(result.targetMet, false);
-    assert.equal(result.blob.size, 100);
-    assert.equal(result.quality, 0);
-    assert.equal(result.width, 1000);
-    assert.equal(result.height, 500);
-    assert.equal(state.encodings.length, 2);
+test('size mode reduces dimensions when the lowest quality is still too large', async () => {
+  await withBrowser({ bytes: ({ width, height, quality }) => Math.ceil(20 + width * height * (0.01 + quality * 0.1)) }, async (state) => {
+    const result = await compressImage(png(), { ...defaults, targetBytes: 1000 });
+    assert.equal(result.targetMet, true);
+    assert.ok(result.blob.size <= 1000);
+    assert.ok(result.width < 1000 && result.height < 500);
+    assert.ok(state.encodings.length <= 60);
   });
 });
 
-test('size mode progressively reduces dimensions only when permitted', async () => {
+test('size mode progressively reduces dimensions in proportion', async () => {
   await withBrowser({ bytes: ({ width, height, quality }) => Math.ceil(100 + width * height * (0.1 + quality * 0.9)) }, async (state) => {
-    const result = await compressImage(png(), { ...defaults, targetBytes: 15000, allowResize: true });
+    const result = await compressImage(png(), { ...defaults, targetBytes: 15000 });
     assert.equal(result.targetMet, true);
     assert.ok(result.blob.size <= 15000);
     assert.ok(result.width < 1000 && result.height < 500);
@@ -389,33 +386,26 @@ test('size mode progressively reduces dimensions only when permitted', async () 
 
 test('unreachable targets terminate and remain unmet even at one pixel', async () => {
   await withBrowser({ width: 16000, height: 1, bytes: () => 100 }, async (state) => {
-    const result = await compressImage(png(16000, 1), { ...defaults, targetBytes: 1, allowResize: true });
+    const result = await compressImage(png(16000, 1), { ...defaults, targetBytes: 1 });
     assert.equal(result.targetMet, false);
     assert.equal(result.blob.size, 100);
     assert.ok(state.encodings.some(({ width, height }) => width === 1 && height === 1));
-    assert.ok(state.encodings.length <= 26);
+    assert.ok(state.encodings.length <= 30);
     assert.equal(state.closed, 1);
   });
 });
 
-test('PNG skips quality search and respects the resize permission', async () => {
-  for (const allowResize of [false, true]) {
-    await withBrowser({ bytes: ({ width, height }) => 100 + width * height }, async (state) => {
-      const result = await compressImage(png(1000, 500, 600000), {
-        ...defaults, format: 'image/png', targetBytes: 15000, allowResize,
-      });
-      assert.equal(result.targetMet, allowResize);
-      assert.ok(state.encodings.every(({ quality }) => quality === 1));
-      const dimensions = new Set(state.encodings.map(({ width, height }) => `${width}x${height}`));
-      assert.equal(dimensions.size, state.encodings.length);
-      if (!allowResize) {
-        assert.equal(state.encodings.length, 1);
-        assert.equal(result.width, 1000);
-      } else {
-        assert.ok(result.blob.size <= 15000);
-      }
+test('PNG skips the quality search and reaches the target through resizing', async () => {
+  await withBrowser({ bytes: ({ width, height }) => 100 + width * height }, async (state) => {
+    const result = await compressImage(png(1000, 500, 600000), {
+      ...defaults, format: 'image/png', targetBytes: 15000,
     });
-  }
+    assert.equal(result.targetMet, true);
+    assert.ok(result.blob.size <= 15000);
+    assert.ok(state.encodings.every(({ quality }) => quality === 1));
+    const dimensions = new Set(state.encodings.map(({ width, height }) => `${width}x${height}`));
+    assert.equal(dimensions.size, state.encodings.length);
+  });
 });
 
 test('size mode returns a valid original only for the same format', async () => {
@@ -451,7 +441,7 @@ test('size mode preserves original bytes and corrects a missing or incorrect MIM
   }
 });
 
-test('size mode does not return a larger encoding when the original is smaller', async () => {
+test('size mode keeps a smaller original when no encoding can reach the target', async () => {
   await withBrowser({ bytes: () => 500 }, async () => {
     const file = jpeg();
     const result = await compressImage(file, { ...defaults, format: 'image/jpeg', targetBytes: 100 });
