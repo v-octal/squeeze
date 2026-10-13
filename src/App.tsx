@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, DragEvent, ReactNode } from 'react'
 import {
   ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronRight, CircleHelp,
-  Columns2, Download, Expand, FileImage, History, LoaderCircle, Plus,
-  ScanLine, SlidersHorizontal, Target, Trash2, Upload, X,
+  Columns2, Download, Expand, FileImage, LoaderCircle, Plus,
+  ScanLine, ShieldCheck, SlidersHorizontal, Target, Trash2, Upload, X,
 } from 'lucide-react'
 import { zipSync } from 'fflate'
 import { compressImage, formatBytes, outputName } from './lib/compress'
@@ -37,25 +37,65 @@ function BrandMark() {
   return <span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M19 8v11H8A11 11 0 0 1 19 8Zm2 0a11 11 0 0 1 11 11H21V8ZM8 21h11v11A11 11 0 0 1 8 21Zm13 0h11a11 11 0 0 1-11 11V21Z" /></svg></span>
 }
 
-function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+function useMobileLayout() {
+  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 860px)').matches)
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 860px)')
+    const update = () => setMobile(query.matches)
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+  return mobile
+}
+
+function Modal({ title, onClose, children, wide = false, sheet = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; sheet?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => {
-    ref.current?.showModal()
+    const dialog = ref.current
+    const previousFocus = document.activeElement
+    dialog?.showModal()
     const previous = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = previous }
+    const updateViewport = () => {
+      const viewport = window.visualViewport
+      const inset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0
+      dialog?.style.setProperty('--keyboard-inset', `${inset}px`)
+      dialog?.style.setProperty('--available-height', `${viewport?.height || window.innerHeight}px`)
+    }
+    updateViewport()
+    window.visualViewport?.addEventListener('resize', updateViewport)
+    window.visualViewport?.addEventListener('scroll', updateViewport)
+    return () => {
+      dialog?.close()
+      document.body.style.overflow = previous
+      window.visualViewport?.removeEventListener('resize', updateViewport)
+      window.visualViewport?.removeEventListener('scroll', updateViewport)
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true })
+    }
   }, [])
-  return <dialog ref={ref} className={`modal ${wide ? 'wide' : ''}`} onCancel={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose() }} aria-labelledby="modal-title">
+  return <dialog ref={ref} className={`modal ${wide ? 'wide' : ''} ${sheet ? 'bottom-sheet' : ''}`} onCancel={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose() }} aria-labelledby="modal-title">
+    {sheet && <span className="sheet-handle" aria-hidden="true" />}
     <div className="modal-heading">
       <h2 id="modal-title">{title}</h2>
-      <button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={18} /></button>
+      {sheet ? <button className="sheet-done" onClick={onClose} autoFocus>Done<Check size={16} /></button> : <button className="icon-button" onClick={onClose} aria-label="Close dialog" autoFocus><X size={18} /></button>}
     </div>
     {children}
   </dialog>
 }
 
-function ImageComparison({ item, pending, settingsError }: { item: QueueItem; pending: boolean; settingsError?: string }) {
-  const [layout, setLayout] = useState<'side' | 'slider'>('side')
+function SettingsPanel({ mobile, open, onClose, item, pending, children }: { mobile: boolean; open: boolean; onClose: () => void; item?: QueueItem; pending: boolean; children: ReactNode }) {
+  if (!mobile) return <section className="card settings-card" aria-labelledby="settings-heading"><div className="card-heading"><h2 id="settings-heading">Settings</h2></div>{children}</section>
+  if (!open) return null
+  return <Modal title="Adjust compression" onClose={onClose} sheet>
+    {item && <div className="sheet-live-result"><img src={item.resultUrl || item.preview} alt={`Output preview: ${item.file.name}`} /><div><span>{pending ? 'Update in progress' : 'Live output'}</span><strong>{pending ? 'Please wait…' : item.result ? formatBytes(item.result.blob.size) : 'Preview unavailable'}</strong></div><span className="sheet-live-badge">{pending ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />}Automatic</span></div>}
+    <div className="sheet-controls">{children}</div>
+    <p className="sheet-note">Changes apply to all images. The preview updates automatically.</p>
+  </Modal>
+}
+
+function ImageComparison({ item, pending, settingsError, mobile = false }: { item: QueueItem; pending: boolean; settingsError?: string; mobile?: boolean }) {
+  const [layout, setLayout] = useState<'side' | 'slider' | null>(null)
+  const activeLayout = layout || (mobile ? 'slider' : 'side')
   const [split, setSplit] = useState(50)
   const [originalDimensions, setOriginalDimensions] = useState('')
   const outputAvailable = Boolean(item.result && item.resultUrl)
@@ -72,11 +112,11 @@ function ImageComparison({ item, pending, settingsError }: { item: QueueItem; pe
         {settingsError ? <><CircleHelp size={13} />Check the settings</> : pending ? <><LoaderCircle size={13} className="spin" />Updating…</> : item.error ? <><CircleHelp size={13} />Preview unavailable</> : <><Check size={13} />Preview ready</>}
       </span>
       <div className="segmented" role="group" aria-label="Comparison layout">
-        <button className={layout === 'side' ? 'selected' : ''} aria-pressed={layout === 'side'} onClick={() => setLayout('side')}><Columns2 size={13} />Side by side</button>
-        <button className={layout === 'slider' ? 'selected' : ''} aria-pressed={layout === 'slider'} disabled={!outputAvailable} onClick={() => setLayout('slider')}><ScanLine size={13} />Slider</button>
+        <button className={activeLayout === 'side' ? 'selected' : ''} aria-pressed={activeLayout === 'side'} onClick={() => setLayout('side')}><Columns2 size={13} /><span className="wide-only">Side by side</span><span className="narrow-only">Stacked</span></button>
+        <button className={activeLayout === 'slider' ? 'selected' : ''} aria-pressed={activeLayout === 'slider'} disabled={!outputAvailable} onClick={() => setLayout('slider')}><ScanLine size={13} />Slider</button>
       </div>
     </div>
-    {layout === 'side' || !outputAvailable
+    {activeLayout === 'side'
       ? <div className="side-by-side">
         <figure>
           <figcaption><strong>Original</strong><span>{formatBytes(item.file.size)}</span></figcaption>
@@ -94,21 +134,32 @@ function ImageComparison({ item, pending, settingsError }: { item: QueueItem; pe
       </div>
       : <div className="comparison-canvas">
         {originalImage}
-        <div className="comparison-overlay" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}>{outputImage}</div>
-        <span className="compare-label after">Compressed · {formatBytes(item.result!.blob.size)}</span>
-        <span className="compare-label before">Original · {formatBytes(item.file.size)}</span>
-        <div className="comparison-divider" style={{ left: `${split}%` }}><span><ChevronRight size={15} /><ChevronRight size={15} /></span></div>
-        <input type="range" min="0" max="100" value={split} onChange={(event) => setSplit(Number(event.target.value))} aria-label="Compare original and compressed image" />
+        {outputAvailable && <><div className="comparison-overlay" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}>{outputImage}</div>
+          <span className="compare-label after">Compressed<span className="wide-only"> · {formatBytes(item.result!.blob.size)}</span></span>
+          <span className="compare-label before">Original<span className="wide-only"> · {formatBytes(item.file.size)}</span></span>
+          <div className="comparison-divider" style={{ left: `${split}%` }}><span><ChevronRight size={15} /><ChevronRight size={15} /></span></div>
+          <input type="range" min="0" max="100" value={split} onChange={(event) => setSplit(Number(event.target.value))} aria-label="Compare original and compressed image" />
+        </>}
+        {pending && <span className="preview-update-label">{settingsError ? 'Previous preview' : 'Update in progress'}</span>}
       </div>}
+    {mobile && <><p className="compare-instruction">{activeLayout === 'slider' ? 'Slide to see the difference' : 'Original above. Compressed below.'}</p><div className="mobile-result-stats">
+      <div><span>Original</span><strong>{formatBytes(item.file.size)}</strong></div><ArrowRight size={15} /><div><span>Compressed</span><strong>{pending ? '…' : item.result ? formatBytes(item.result.blob.size) : '—'}</strong></div>
+      <span className="result-reduction">{pending ? <LoaderCircle size={16} className="spin" /> : item.result ? `${Math.abs(Math.round((1 - item.result.blob.size / item.file.size) * 100))}% ${item.result.blob.size > item.file.size ? 'larger' : 'smaller'}` : '—'}</span>
+    </div></>}
+    {item.error && <p className="file-error">{item.error}</p>}
+    {settingsError && mobile && <p className="file-warning">Open Adjust to correct the settings.</p>}
     {item.result && !item.result.targetMet && !pending && <p className="file-warning">This is the smallest possible file for this format.</p>}
   </div>
 }
 
 function App() {
+  const mobile = useMobileLayout()
+  const [adjustmentsOpen, setAdjustmentsOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
+  const [downloaded, setDownloaded] = useState(false)
+  const downloadFeedbackTimer = useRef<number | undefined>(undefined)
   const [sources, setSources] = useState<ImageSource[]>([])
   const [items, setItems] = useState<QueueItem[]>([])
-  const [history, setHistory] = useState<QueueItem[]>([])
-  const [view, setView] = useState<'compressor' | 'recent'>('compressor')
   const [mode, setMode] = useState<CompressionMode>('size')
   const [target, setTarget] = useState('200')
   const [unit, setUnit] = useState<'KB' | 'MB'>('KB')
@@ -132,18 +183,19 @@ function App() {
     return () => {
       urls.forEach((url) => URL.revokeObjectURL(url))
       urls.clear()
+      window.clearTimeout(downloadFeedbackTimer.current)
     }
   }, [])
 
   useEffect(() => {
-    const activeUrls = new Set([...sources.map((item) => item.preview), ...[...items, ...history].flatMap((item) => [item.preview, ...(item.resultUrl ? [item.resultUrl] : [])])])
+    const activeUrls = new Set([...sources.map((item) => item.preview), ...items.flatMap((item) => [item.preview, ...(item.resultUrl ? [item.resultUrl] : [])])])
     objectUrls.current.forEach((url) => {
       if (!activeUrls.has(url)) {
         URL.revokeObjectURL(url)
         objectUrls.current.delete(url)
       }
     })
-  }, [sources, items, history])
+  }, [sources, items])
 
   const targetBytes = Number(target) * (unit === 'KB' ? 1024 : 1024 * 1024)
   const targetKB = targetBytes / 1024
@@ -156,8 +208,7 @@ function App() {
       : ''
   const isPending = (item: QueueItem) => Boolean(settingsError) || item.settingsKey !== settingsKey || item.status === 'ready' || item.status === 'working'
   const selectedItem = items.find((item) => item.id === selectedId) || items[0]
-  const comparison = items.find((item) => item.id === comparisonId) || history.find((item) => item.id === comparisonId)
-  const comparisonActive = Boolean(comparison && items.some((item) => item.id === comparison.id))
+  const comparison = items.find((item) => item.id === comparisonId)
   const completed = items.filter((item) => item.status === 'done' && item.result && !isPending(item))
   const previewsPending = busy || items.some(isPending)
 
@@ -182,7 +233,6 @@ function App() {
             objectUrls.current.add(resultUrl)
             const finished: QueueItem = { ...source, result, resultUrl, status: 'done', format: settings.format, settingsKey }
             setItems((current) => current.map((item) => item.id === source.id ? finished : item))
-            setHistory((current) => [finished, ...current.filter((item) => item.id !== source.id)])
           } catch (error) {
             if (cancelled) return
             setItems((current) => current.map((item) => item.id === source.id ? { ...source, status: 'error', settingsKey, error: error instanceof Error ? error.message : 'This image could not be compressed.' } : item))
@@ -230,7 +280,6 @@ function App() {
       setItems((current) => [...current, ...accepted])
     }
     setNotice(errors.join(' '))
-    setView('compressor')
     if (inputRef.current) inputRef.current.value = ''
   }
 
@@ -245,6 +294,10 @@ function App() {
     setSources((current) => id ? current.filter((item) => item.id !== id) : [])
     setItems((current) => id ? current.filter((item) => item.id !== id) : [])
     if (!id || comparisonId === id) setComparisonId(null)
+    if (!id || items.length === 1) {
+      setFilesOpen(false)
+      setAdjustmentsOpen(false)
+    }
   }
 
   function downloadBlob(blob: Blob, name: string) {
@@ -255,6 +308,9 @@ function App() {
     document.body.append(link)
     link.click()
     link.remove()
+    setDownloaded(true)
+    window.clearTimeout(downloadFeedbackTimer.current)
+    downloadFeedbackTimer.current = window.setTimeout(() => setDownloaded(false), 2500)
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
@@ -287,12 +343,12 @@ function App() {
     setUnit(kilobytes >= 1024 ? 'MB' : 'KB')
   }
 
-  function renderFile(item: QueueItem, isHistory = false) {
+  function renderFile(item: QueueItem) {
     const saved = item.result ? Math.round((1 - item.result.blob.size / item.file.size) * 100) : 0
-    const pending = !isHistory && isPending(item)
-    const selected = !isHistory && selectedItem?.id === item.id
+    const pending = isPending(item)
+    const selected = selectedItem?.id === item.id
     return <div className={`file-row ${item.status} ${selected ? 'selected-file' : ''}`} key={item.id}>
-      <button className="file-thumbnail" onClick={() => isHistory ? setComparisonId(item.id) : setSelectedId(item.id)} aria-label={`Preview ${item.file.name}`} aria-pressed={selected}><img src={item.preview} alt="" /></button>
+      <button className="file-thumbnail" onClick={() => { setSelectedId(item.id); setFilesOpen(false) }} aria-label={`Preview ${item.file.name}`} aria-pressed={selected}><img src={item.preview} alt="" /></button>
       <div className="file-information">
         <span className="file-name" title={item.file.name}>{item.file.name}</span>
         <div className="file-meta">
@@ -306,36 +362,37 @@ function App() {
         {item.result && item.result.targetMet && saved < 0 && !pending && <p className="file-hint">Larger than the original. WebP or a lower quality gives a smaller file.</p>}
       </div>
       <div className="file-actions">
-        <button className="icon-button" onClick={() => { setSelectedId(item.id); setComparisonId(item.id) }} aria-label={`Compare ${item.file.name}`}><ScanLine size={16} /></button>
+        <button className="icon-button" onClick={() => { setFilesOpen(false); setSelectedId(item.id); setComparisonId(item.id) }} aria-label={`Compare ${item.file.name}`}><ScanLine size={16} /></button>
         {item.result && <button className="icon-button" onClick={() => downloadItem(item)} disabled={pending} aria-label={`Download ${item.file.name}`}><ArrowDownToLine size={16} /></button>}
-        {!isHistory && <button className="icon-button" onClick={() => removeFiles(item.id)} aria-label={`Remove ${item.file.name}`}><X size={16} /></button>}
+        <button className="icon-button" onClick={() => removeFiles(item.id)} aria-label={`Remove ${item.file.name}`}><X size={16} /></button>
       </div>
     </div>
   }
 
-  return <div className="app">
+  const showBar = items.length > 0
+  const selectedPending = Boolean(selectedItem && isPending(selectedItem))
+  const settingsSummary = mode === 'size' ? `${target || '—'} ${unit}` : mode === 'quality' ? `${quality}% quality` : `${dimension || '—'} px`
+
+  return <div className={`app ${showBar ? 'has-bar mobile-editor' : ''}`}>
     <header className="topbar">
-      <a className="brand" href="./" onClick={(event) => { event.preventDefault(); setView('compressor') }} aria-label="Squeeze home"><BrandMark /><span>squeeze<span className="brand-period">.</span></span></a>
-      <nav className="segmented" aria-label="Views">
-        <button className={view === 'compressor' ? 'selected' : ''} aria-pressed={view === 'compressor'} onClick={() => setView('compressor')} title="Compress"><FileImage size={14} />Compress</button>
-        <button className={view === 'recent' ? 'selected' : ''} aria-pressed={view === 'recent'} onClick={() => setView('recent')} title="Recent files"><History size={14} />Recent{history.length > 0 && <span className="nav-count">{history.length}</span>}</button>
-      </nav>
+      <a className="brand" href="./" onClick={(event) => { event.preventDefault(); window.scrollTo({ top: 0 }) }} aria-label="Squeeze home"><BrandMark /><span>squeeze<span className="brand-period">.</span></span></a>
       <button className="icon-button" onClick={() => setHelp(true)} aria-label="How it works"><CircleHelp size={19} /></button>
     </header>
 
     <main>
       {notice && <div className="notice" role="alert"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss message"><X size={16} /></button></div>}
 
-      {view === 'compressor' ? <div className="workspace">
-        <section className="work-column" aria-label="Images">
+      <div className={`workspace ${items.length ? 'has-files' : ''}`}>
           <input className="visually-hidden" ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif" multiple onChange={(event) => addFiles(event.target.files)} aria-label="Choose images" />
           <div className={`dropzone ${dragging ? 'dragging' : ''} ${items.length ? 'has-files' : ''} ${busy ? 'is-busy' : ''}`} onDragEnter={(event) => { event.preventDefault(); dragDepth.current++; setDragging(true) }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current === 0) setDragging(false) }} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
             {items.length === 0
               ? <>
+                {mobile && <div className="mobile-intro-art" aria-hidden="true"><div className="intro-photo"><svg viewBox="0 0 160 190"><rect width="160" height="190" rx="16" fill="#ecdfcb" /><circle cx="115" cy="49" r="23" fill="#f7b776" /><path d="M0 136 50 65 108 148 139 111 160 138V190H0Z" fill="#a4af89" /><path d="M0 162 63 118 111 173 160 144V190H0Z" fill="#657b59" /></svg></div><span className="intro-compressed"><FileImage size={28} /><span>LESS SPACE</span></span><span className="intro-arrow"><ArrowDownToLine size={22} /></span></div>}
                 <span className="dropzone-icon"><Upload size={22} /></span>
-                <h1>Drop your images here</h1>
-                <p>JPG, PNG, WebP, or AVIF. Any size. Nothing leaves your browser.</p>
-                <button className="button primary" onClick={() => inputRef.current?.click()}><Plus size={16} />Choose images</button>
+                <h1>{mobile ? <>Less size.<br /><span>More possibilities.</span></> : 'Drop your images here'}</h1>
+                <p>{mobile ? 'Make your images smaller. See the difference before you save.' : 'JPG, PNG, WebP, or AVIF. Any size. Nothing leaves your browser.'}</p>
+                <button className="button primary" onClick={() => inputRef.current?.click()}><Plus size={18} />Choose images<ArrowRight size={17} className="narrow-only" /></button>
+                {mobile && <><span className="supported-formats">JPG · PNG · WebP · AVIF</span><div className="mobile-privacy"><ShieldCheck size={15} />Your images stay on your device.</div></>}
               </>
               : <>
                 <Upload size={16} />
@@ -344,18 +401,55 @@ function App() {
               </>}
           </div>
 
+          <SettingsPanel mobile={mobile} open={adjustmentsOpen} onClose={() => setAdjustmentsOpen(false)} item={selectedItem} pending={selectedPending}>
+            <div className="segmented mode-tabs" role="tablist" aria-label="Compression method">
+              {modes.map(({ value, label, icon: Icon }) => <button type="button" id={`tab-${value}`} aria-selected={mode === value} aria-controls={`panel-${value}`} role="tab" tabIndex={mode === value ? 0 : -1} key={value} className={mode === value ? 'selected' : ''} onClick={() => setMode(value)} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); const next = modes[(modes.findIndex((entry) => entry.value === mode) + (event.key === 'ArrowRight' ? 1 : 2)) % modes.length].value; setMode(next); document.getElementById(`tab-${next}`)?.focus() } }}><Icon size={14} />{label}</button>)}
+            </div>
+            <div className="mode-panel" role="tabpanel" id={`panel-${mode}`} aria-labelledby={`tab-${mode}`}>
+              {mode === 'size' && <>
+                <label className="control-label" htmlFor="target-size">Target file size</label>
+                <div className="size-input-wrap">
+                  <input id="target-size" type="number" inputMode="decimal" min={unit === 'KB' ? 1 : 0.001} step="any" value={target} onChange={(event) => setTarget(event.target.value)} />
+                  <div className="select-wrap unit"><select aria-label="File size unit" value={unit} onChange={(event) => { const next = event.target.value as 'KB' | 'MB'; if (Number(target) > 0) setTarget(String(Number((next === 'MB' ? Number(target) / 1024 : Number(target) * 1024).toFixed(3)))); setUnit(next) }}><option>KB</option><option>MB</option></select><ChevronDown size={13} /></div>
+                </div>
+                <div className="presets">{[100, 200, 500, 1024].map((value) => <button key={value} className={Math.abs(targetKB - value) < 0.01 ? 'selected' : ''} onClick={() => choosePreset(value)}>{value === 1024 ? '1 MB' : `${value} KB`}</button>)}</div>
+                <p className="control-description">Quality is lowered first, then the dimensions, until the file fits.</p>
+              </>}
+              {mode === 'quality' && <>
+                <div className="control-row"><label className="control-label" htmlFor="quality-level">Image quality</label><span className="quality-value">{quality}%</span></div>
+                <input id="quality-level" className="range-input" type="range" min="10" max="100" value={quality} disabled={format === 'image/png'} style={{ '--range-progress': `${(quality - 10) / 90 * 100}%` } as CSSProperties} onChange={(event) => setQuality(Number(event.target.value))} />
+                <div className="presets">{[50, 75, 85, 95].map((value) => <button key={value} className={quality === value ? 'selected' : ''} disabled={format === 'image/png'} onClick={() => setQuality(value)}>{value}%</button>)}</div>
+                <p className="control-description">{format === 'image/png' ? 'PNG is lossless. Choose WebP or JPEG to adjust quality.' : 'The dimensions stay the same.'}</p>
+              </>}
+              {mode === 'resize' && <>
+                <label className="control-label" htmlFor="max-dimension">Maximum width or height</label>
+                <div className="size-input-wrap">
+                  <input id="max-dimension" type="number" inputMode="numeric" min="1" max="16384" step="1" value={dimension} onChange={(event) => setDimension(event.target.value)} />
+                  <span className="pixel-unit">px</span>
+                </div>
+                <div className="presets">{[640, 1280, 1920, 2560].map((value) => <button key={value} className={Number(dimension) === value ? 'selected' : ''} onClick={() => setDimension(String(value))}>{value}</button>)}</div>
+                <p className="control-description">The proportions stay the same. Images are never upscaled.</p>
+              </>}
+            </div>
+            <label className="control-label" htmlFor="output-format">Output format</label>
+            <div className="select-wrap full"><select id="output-format" value={format} onChange={(event) => setFormat(event.target.value as OutputFormat)}>{formats.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><ChevronDown size={14} /></div>
+            {settingsError && <p className="settings-error" role="alert">{settingsError}</p>}
+          </SettingsPanel>
+
           {selectedItem && <section className="card live-preview" aria-label="Live preview">
             <div className="card-heading">
-              <h2>Preview</h2>
+              {mobile ? <div className="mobile-file-title"><span>IMAGE {items.findIndex((item) => item.id === selectedItem.id) + 1} OF {items.length}</span><h2 title={selectedItem.file.name}>{selectedItem.file.name}</h2></div> : <h2>Preview</h2>}
               <div className="card-tools">
-                {items.length > 1 && <div className="select-wrap"><select id="preview-file" aria-label="Image to compare" value={selectedItem.id} onChange={(event) => setSelectedId(event.target.value)}>{items.map((item) => <option key={item.id} value={item.id}>{item.file.name}</option>)}</select><ChevronDown size={13} /></div>}
-                <button className="icon-button" onClick={() => setComparisonId(selectedItem.id)} aria-label="Expand image comparison"><Expand size={16} /></button>
+                {!mobile && items.length > 1 && <div className="select-wrap"><select id="preview-file" aria-label="Image to compare" value={selectedItem.id} onChange={(event) => setSelectedId(event.target.value)}>{items.map((item) => <option key={item.id} value={item.id}>{item.file.name}</option>)}</select><ChevronDown size={13} /></div>}
+                <button className="icon-button" onClick={() => setComparisonId(selectedItem.id)} aria-label="Expand image comparison"><Expand size={18} /></button>
               </div>
             </div>
-            <ImageComparison key={selectedItem.id} item={selectedItem} pending={isPending(selectedItem)} settingsError={settingsError} />
+            <ImageComparison key={selectedItem.id} item={selectedItem} pending={selectedPending} settingsError={settingsError} mobile={mobile} />
           </section>}
 
-          {items.length > 0 && <section className="card" aria-label="Files">
+          {mobile && selectedItem && <section className="mobile-image-tray" aria-label="Your images"><div className="tray-heading"><span>{items.length} {items.length === 1 ? 'image' : 'images'}<span className="tray-hint"> · Tap to switch</span></span><button className="text-button" onClick={() => setFilesOpen(true)}>Manage<ChevronRight size={14} /></button></div><div className="filmstrip">{items.map((item, index) => <button key={item.id} className={`filmstrip-image ${item.id === selectedItem.id ? 'selected' : ''}`} onClick={(event) => { setSelectedId(item.id); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }} aria-label={`Preview ${item.file.name}`} aria-pressed={item.id === selectedItem.id}><img src={item.preview} alt="" /><span className="filmstrip-number">{index + 1}</span>{item.status === 'error' && <span className="filmstrip-error"><CircleHelp size={12} /></span>}</button>)}<button className="filmstrip-add" onClick={() => inputRef.current?.click()} disabled={items.length >= 20} aria-label="Add more images"><Plus size={21} /><span>Add</span></button></div></section>}
+
+          {!mobile && items.length > 0 && <section className="card files-card" aria-label="Files">
             <div className="card-heading">
               <h2>{items.length} {items.length === 1 ? 'image' : 'images'}</h2>
               <button className="text-button" onClick={() => removeFiles()}><Trash2 size={13} />Clear all</button>
@@ -366,56 +460,20 @@ function App() {
               <button className="button primary" onClick={() => void downloadAll()} disabled={zipping}>{zipping ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{completed.length > 1 ? 'Download all' : 'Download'}</button>
             </div>}
           </section>}
-        </section>
-
-        <section className="card settings-card" aria-labelledby="settings-heading">
-          <div className="card-heading"><h2 id="settings-heading">Settings</h2></div>
-          <div className="segmented mode-tabs" role="tablist" aria-label="Compression method">
-            {modes.map(({ value, label, icon: Icon }) => <button type="button" id={`tab-${value}`} aria-selected={mode === value} aria-controls={`panel-${value}`} role="tab" tabIndex={mode === value ? 0 : -1} key={value} className={mode === value ? 'selected' : ''} onClick={() => setMode(value)} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); const next = modes[(modes.findIndex((entry) => entry.value === mode) + (event.key === 'ArrowRight' ? 1 : 2)) % modes.length].value; setMode(next); document.getElementById(`tab-${next}`)?.focus() } }}><Icon size={14} />{label}</button>)}
-          </div>
-          <div className="mode-panel" role="tabpanel" id={`panel-${mode}`} aria-labelledby={`tab-${mode}`}>
-            {mode === 'size' && <>
-              <label className="control-label" htmlFor="target-size">Target file size</label>
-              <div className="size-input-wrap">
-                <input id="target-size" type="number" min={unit === 'KB' ? 1 : 0.001} step="any" value={target} onChange={(event) => setTarget(event.target.value)} />
-                <div className="select-wrap unit"><select aria-label="File size unit" value={unit} onChange={(event) => { const next = event.target.value as 'KB' | 'MB'; if (Number(target) > 0) setTarget(String(Number((next === 'MB' ? Number(target) / 1024 : Number(target) * 1024).toFixed(3)))); setUnit(next) }}><option>KB</option><option>MB</option></select><ChevronDown size={13} /></div>
-              </div>
-              <div className="presets">{[100, 200, 500, 1024].map((value) => <button key={value} className={Math.abs(targetKB - value) < 0.01 ? 'selected' : ''} onClick={() => choosePreset(value)}>{value === 1024 ? '1 MB' : `${value} KB`}</button>)}</div>
-              <p className="control-description">Quality is lowered first, then the dimensions, until the file fits.</p>
-            </>}
-            {mode === 'quality' && <>
-              <div className="control-row"><label className="control-label" htmlFor="quality-level">Image quality</label><span className="quality-value">{quality}%</span></div>
-              <input id="quality-level" className="range-input" type="range" min="10" max="100" value={quality} disabled={format === 'image/png'} style={{ '--range-progress': `${(quality - 10) / 90 * 100}%` } as CSSProperties} onChange={(event) => setQuality(Number(event.target.value))} />
-              <div className="presets">{[50, 75, 85, 95].map((value) => <button key={value} className={quality === value ? 'selected' : ''} disabled={format === 'image/png'} onClick={() => setQuality(value)}>{value}%</button>)}</div>
-              <p className="control-description">{format === 'image/png' ? 'PNG is lossless. Choose WebP or JPEG to adjust quality.' : 'The dimensions stay the same.'}</p>
-            </>}
-            {mode === 'resize' && <>
-              <label className="control-label" htmlFor="max-dimension">Maximum width or height</label>
-              <div className="size-input-wrap">
-                <input id="max-dimension" type="number" min="1" max="16384" step="1" value={dimension} onChange={(event) => setDimension(event.target.value)} />
-                <span className="pixel-unit">px</span>
-              </div>
-              <div className="presets">{[640, 1280, 1920, 2560].map((value) => <button key={value} className={Number(dimension) === value ? 'selected' : ''} onClick={() => setDimension(String(value))}>{value}</button>)}</div>
-              <p className="control-description">The proportions stay the same. Images are never upscaled.</p>
-            </>}
-          </div>
-          <label className="control-label" htmlFor="output-format">Output format</label>
-          <div className="select-wrap full"><select id="output-format" value={format} onChange={(event) => setFormat(event.target.value as OutputFormat)}>{formats.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><ChevronDown size={14} /></div>
-          {settingsError && <p className="settings-error" role="alert">{settingsError}</p>}
-        </section>
-      </div>
-        : <section className="card recent-panel" aria-label="Recent files">
-          <div className="card-heading">
-            <h2>Recent files</h2>
-            {history.length > 0 && <button className="text-button" disabled={zipping} onClick={() => void downloadAll(history)}><Download size={14} />Download all</button>}
-          </div>
-          {history.length
-            ? <><div className="file-list recent-files">{history.map((item) => renderFile(item, true))}</div><p className="control-description">These files stay in this tab. Download them before you close it.</p></>
-            : <div className="recent-empty"><p>Compressed images appear here until you close or refresh this tab.</p><button className="button" onClick={() => setView('compressor')}>Compress an image</button></div>}
-        </section>}
+        </div>
     </main>
 
     <footer className="page-footer">Images are processed in your browser and never uploaded.</footer>
+
+    {mobile && showBar && selectedItem && <div className="mobile-bar">
+      <button className="current-settings" onClick={() => setAdjustmentsOpen(true)} aria-label="Adjust compression"><span>{settingsError ? 'Check settings' : `${settingsSummary} · ${format.split('/')[1].toUpperCase()}`}</span><span>Change<ChevronRight size={13} /></span></button>
+      <div className="mobile-actions"><button className="button adjust-button" onClick={() => setAdjustmentsOpen(true)} aria-label="Adjust image settings"><SlidersHorizontal size={18} />Adjust</button><button className="button primary mobile-download" onClick={() => downloadItem(selectedItem)} disabled={!selectedItem.result || selectedPending} aria-label={`Download ${selectedItem.file.name}`}>
+        {selectedPending ? <LoaderCircle size={19} className="spin" /> : downloaded ? <Check size={19} /> : <Download size={19} />}
+        <span>{selectedPending ? 'Update in progress' : downloaded ? 'Download started' : 'Download image'}</span>
+      </button></div>
+    </div>}
+
+    {mobile && filesOpen && <Modal title="Your images" onClose={() => setFilesOpen(false)} sheet><div className="manage-heading"><span>{items.length} {items.length === 1 ? 'image' : 'images'}</span><button className="text-button" onClick={() => removeFiles()}><Trash2 size={14} />Clear all</button></div><div className="file-list">{items.map((item) => renderFile(item))}</div><button className="button primary batch-download" disabled={previewsPending || zipping || !completed.length} onClick={() => void downloadAll()}>{zipping ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}{zipping ? 'Create ZIP…' : `Download all${items.length > 1 ? ' as ZIP' : ''}`}</button></Modal>}
 
     {help && <Modal title="How it works" onClose={() => setHelp(false)}>
       <ol className="guide">
@@ -426,8 +484,8 @@ function App() {
       <p className="control-description">Target size lowers the quality first, then the dimensions, until the file fits. Everything runs locally; nothing is uploaded or stored.</p>
     </Modal>}
     {comparison && <Modal title={comparison.file.name} onClose={() => setComparisonId(null)} wide>
-      <ImageComparison key={comparison.id} item={comparison} pending={comparisonActive && isPending(comparison)} settingsError={comparisonActive ? settingsError : undefined} />
-      {comparison.result && <div className="comparison-download"><button className="button primary" onClick={() => downloadItem(comparison)} disabled={comparisonActive && isPending(comparison)}><Download size={15} />Download image</button></div>}
+      <ImageComparison key={comparison.id} item={comparison} pending={isPending(comparison)} settingsError={settingsError} mobile={mobile} />
+      {comparison.result && <div className="comparison-download"><button className="button primary" onClick={() => downloadItem(comparison)} disabled={isPending(comparison)}><Download size={15} />Download image</button></div>}
     </Modal>}
   </div>
 }
