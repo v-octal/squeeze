@@ -463,7 +463,10 @@ function App() {
         </div>
     </main>
 
-    <footer className="page-footer">Images are processed in your browser and never uploaded.</footer>
+    <footer className="page-footer">
+      <p>Images are processed in your browser and never uploaded.</p>
+      <p>Built with <a href="https://github.com/bottomless/agent-duel" target="_blank" rel="noopener noreferrer">agent-duel</a></p>
+    </footer>
 
     {mobile && showBar && selectedItem && <div className="mobile-bar">
       <button className="current-settings" onClick={() => setAdjustmentsOpen(true)} aria-label="Adjust compression"><span>{settingsError ? 'Check settings' : `${settingsSummary} · ${format.split('/')[1].toUpperCase()}`}</span><span>Change<ChevronRight size={13} /></span></button>
